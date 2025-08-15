@@ -1,22 +1,30 @@
 {
   "name": "websocket",
+  "description": "无人机维修",
   "version": "1.0.0",
-  "main": "index.js",
   "bin": "./server.js",
+  "main": "server.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "pkg": "pkg . -t node16-win-x64 --out-path=dist/"
+    "pkg": "pkg . -t node16-win-x64 --out-path=dist/",
+    "start": "node server.js",
+    "dev": "nodemon server.js",
+    "init-data": "node scripts/init-data.js",
+    "build": "vercel --prod"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "description": "",
   "dependencies": {
+    "@upstash/redis": "^1.35.3",
     "bcrypt": "^6.0.0",
+    "bcryptjs": "^3.0.2",
     "body-parser": "^2.2.0",
     "Buffer": "^0.0.0",
     "cesium": "^1.119.0",
+    "cloudinary": "^2.7.0",
     "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "fs-extra": "^11.3.0",
     "jsonwebtoken": "^9.0.2",

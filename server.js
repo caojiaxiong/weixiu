@@ -1,3 +1,20 @@
+// 数据库
+
+require('dotenv').config()
+const { Redis } = require('@upstash/redis');
+const redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
+
+// 文件服务器
+const cloudinary = require('cloudinary').v2
+cloudinary.config({
+    cloud_name: process.env.CLOUND_NAME,
+    api_key: process.env.API_KEY,
+    api_secret: process.env.API_SECRET // Click 'View API Keys' above to copy your API secret
+});
+// 
 const express = require('express');
 const fs = require('fs').promises;
 var multer = require('multer')
@@ -8,169 +25,65 @@ const app = express();
 const jwt = require('jsonwebtoken');
 const moment = require('moment')
 app.use(cors());
-app.use((req, res, next) => {
-    res.removeHeader('X-Content-Type-Options')
-    res.removeHeader('X-Frame-Options')
-})
-const PORT = 3200;
-const SP_FILE = path.join(__dirname, './splist.json');//商品配件
-const USERS_FILE = path.join(__dirname, './users.json');//用户
-const UPLOAD_FILE = path.join(__dirname, 'upload');//头像
-const ORDER_FILE = path.join(__dirname, './orders.json');//订单
-const MD_FILE = path.join(__dirname, './mdlist.json');//门店
-const SB_FILE = path.join(__dirname, './shebei.json');//设备
-const ADDRESS_FILE = path.join(__dirname, './address.json');//城市
-const CHARTS_FILE = path.join(__dirname, './charts.json');//聊天
 
-// 中间件
+const PORT = 3000;
+// 处理 application/x-www-form-urlencoded
+app.use(bodyParser.urlencoded({ extended: true }));
+// 处理 application/json
 app.use(bodyParser.json());
-// console.log(fs.readdirSync(UPLOAD_FILE));
 
-// 确保用户文件存在
-async function initializeUsersFile() {
+// 解析文本格式的Raw数据（可选）
+app.use(bodyParser.text({ type: 'text/*' }));
+
+// 写入数据
+const writeData = async (name, data) => {
+    await redis.set(name, data);
+}
+// 读取数据
+const readData = async (name) => {
     try {
-        await fs.access(SP_FILE);
-        await fs.access(USERS_FILE);
-        await fs.access(ORDER_FILE);
-        await fs.access(UPLOAD_FILE)
+        const data = await redis.get(name); // 返回 "value"
+        // console.log(users, '获取数据库user');
+        return data || []
     } catch (error) {
-        await fs.writeFile(SP_FILE, '[]', 'utf8');
-        await fs.writeFile(USERS_FILE, '[]', 'utf8');
-        await fs.writeFile(ORDER_FILE, '[]', 'utf8');
-        fs.mkdir(UPLOAD_FILE, { recursive: true })
+        console.log(error, '报错');
+
+        return []
     }
 }
-// 设置订单列表
-async function setorder() {
 
-    var orders = JSON.parse(await fs.readFile(ORDER_FILE, 'utf8'));
-    var goods = JSON.parse(await fs.readFile(SP_FILE, 'utf8'));
-    orders = []
-    goods = []
-    for (let i = 1; i < 100; i++) {
-        let number = new Date().getTime()
-        orders.push({
-            number: number,
-            id: i,
-            status: 1,
-            describe: "这是描述这是描述这是描述这是描述" + i,
-            createTime: "2022-12-12 12:00:00",
+// 上传图片
+// 设置存储配置
+const upload = multer();
+app.post('/upload', upload.single('image'), async function (req, res, next) {
+    console.log(req.file, 'req');
+    try {
+        const fileBuffer = req.file.buffer;
+        const result = await cloudinary.uploader.upload('data:image/png;base64,' + fileBuffer.toString('base64'), {
+            resource_type: 'auto',
+            folder: "jz",
         });
-        goods.push({
-            number: number,
-            id: i,
-            status: 1,
-            name: "配件" + i,
-            createTime: "2022-12-12 12:00:00",
-            imgname: i,
-            jg: i
-        })
-    }
-    await fs.writeFile(ORDER_FILE, JSON.stringify(orders, null, 2));
-    await fs.writeFile(SP_FILE, JSON.stringify(goods, null, 2));
-}
-// setorder()
-
-// 文件上传配置
-const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, UPLOAD_FILE);
-    },
-    filename: (req, file, cb) => {
-        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-        cb(null, 'avatar-' + uniqueSuffix + path.extname(file.originalname));
-    }
-});
-const upload = multer({
-    storage: storage,
-    fileFilter: (req, file, cb) => {
-        console.log(file.mimetype, '文件类型');
-        const filetypes = /jpeg|jpg|png|gif|mp4/;
-        const mimetype = filetypes.test(file.mimetype);
-        const extname = filetypes.test(path.extname(file.originalname).toLowerCase());
-
-        if (mimetype && extname) {
-            return cb(null, true);
-        }
-        cb(new Error('只允许上传图片文件'));
-    }
-});
-
-
-// var upload = multer({ dest: 'upload/' });
-app.post('/upload', upload.single('file'), async function (req, res, next) {
-    console.log(req.body.id, 'reqsa');
-    try {
-        if (!req.file) {
-            res.send({
-                status: 401,
-                msg: "请上传文件",
-            });
-        }
-        const imageUrl = `${req.protocol}://${req.get('host')}/upload/${req.file.filename}`
-        const users = JSON.parse(await fs.readFile(USERS_FILE, 'utf8'));
-        let index = users.findIndex(v => {
-            return v.id == req.body.id
-        })
-        console.log(index, 'index');
-        if (index != -1) {
-            users[index].avatar = imageUrl
-        }
-        await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
-        let obj = {
-            status: 200,
-            msg: "上传成功",
-            url: imageUrl
-        }
-        res.send(obj);
+        res.json({
+            url: result.secure_url,
+            success: true,
+            message: '上传成功',
+        });
     } catch (error) {
-        console.log(error, '上传报错');
+        console.log(error, '上传失败了');
+
+        res.status(500).json({ error: 'Upload failed' });
     }
 
 })
-app.post('/uploads', upload.single('file'), async function (req, res, next) {
-    console.log(req.file, 'files');
-    try {
-        if (!req.file) {
-            res.send({
-                status: 401,
-                msg: "请上传文件",
-            });
-        }
-        const imageUrl = `${req.protocol}://${req.get('host')}/upload/${req.file.filename}`
-        const users = JSON.parse(await fs.readFile(USERS_FILE, 'utf8'));
-        let index = users.findIndex(v => {
-            return v.id == req.body.id
-        })
-        console.log(index, 'index');
-        if (index != -1) {
-            users[index].avatar = imageUrl
-        }
-        await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
-        let obj = {
-            status: 200,
-            msg: "上传成功",
-            url: imageUrl
-        }
-        res.send(obj);
-    } catch (error) {
-        console.log(error, '上传报错');
-    }
-
-})
-app.use('/upload', express.static(UPLOAD_FILE));
 
 // 注册用户
 app.post('/register', async (req, res) => {
-    console.log('进来了');
+
     try {
-        console.log(req.body);
         const { phone, password, username, } = req.body;
-        const users = JSON.parse(await fs.readFile(USERS_FILE, 'utf8'));
+        const users = await readData('wxUsers')
         if (!req.body.id) {
-            console.log('没有id是注册');
             if (users.some(user => user.phone === phone)) {
-                console.log('该手机已注册');
                 let obj = {
                     status: 409,
                     msg: "该手机已注册"
@@ -178,11 +91,10 @@ app.post('/register', async (req, res) => {
                 res.send(obj);
                 return
             } else {
-                console.log('可以注册');
                 let id = new Date().getTime()
                 let createTime = moment(new Date()).format("YYYY-MM-DD HH:mm:ss")
                 users.push({ phone, password, username, id, createTime });
-                await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+                writeData('wxUsers', users)
                 let obj = {
                     status: 200,
                     msg: "注册成功"
@@ -198,7 +110,7 @@ app.post('/register', async (req, res) => {
                 users[index] = {
                     phone, password, username,
                 }
-                await fs.writeFile(USERS_FILE, JSON.stringify(users, null, 2));
+                writeData('wxUsers', users)
                 let obj = {
                     status: 200,
                     msg: "修改成功"
@@ -208,6 +120,8 @@ app.post('/register', async (req, res) => {
         }
 
     } catch (error) {
+        console.log(error, '报错');
+
         res.status(500).json({ error: '服务器错误' });
     }
 });
@@ -216,7 +130,7 @@ app.post('/register', async (req, res) => {
 app.post('/login', async (req, res) => {
     try {
         const { phone, password } = req.body;
-        const users = JSON.parse(await fs.readFile(USERS_FILE, 'utf8'));
+        const users = await readData('wxUsers')
         const hasUser = users.find(u => u.phone === phone);
         const user = users.find(u => u.phone === phone && u.password === password);
         if (!hasUser) {
@@ -259,39 +173,21 @@ app.post('/login', async (req, res) => {
     }
 });
 
-app.use('/images', express.static(path.join(__dirname, 'imgs')));
-app.use('/videos', express.static(path.join(__dirname, 'videos')));
 
 // 获取配件列表
 app.get('/pj/list', async (req, res) => {
     try {
-        var users = JSON.parse(await fs.readFile(SP_FILE, 'utf8'));
-
+        const peijians = await readData('peijian')
         let userInfo = req.query
-
-
-        var productsWithImages = users.map(product => ({
-            ...product,
-            // 生成完整的图片访问URL
-            imageUrl: `${req.protocol}://${req.get('host')}/images/${product.imgname}.png`
-        }));
-        console.log(productsWithImages, 'productsWithImages');
-        // res.json(productsWithImages);
-        if (userInfo.name) productsWithImages = productsWithImages.filter(v => {
-            return v.name.includes(userInfo.name)
-        })
-
-        const totalItems = productsWithImages.length;
+        const totalItems = peijians.length;
         let page = parseInt(userInfo.page)
         let pageSize = parseInt(userInfo.pageSize)
         const start = (page - 1) * pageSize
         const end = start + pageSize;
         const totalPages = Math.ceil(totalItems / pageSize);
         let items = []
-        items = productsWithImages.slice(start, end);
-        const total = productsWithImages.length
-
-
+        items = peijians.slice(start, end);
+        const total = peijians.length
         let obj = {
             status: 200,
             msg: "获取配件列表成功",
@@ -301,22 +197,19 @@ app.get('/pj/list', async (req, res) => {
                 pages: totalPages
             }
         }
-
         res.send(obj);
-
-
     } catch (error) {
+        console.log(error, '报错');
+
         res.status(500).json({ error: '服务器错误' });
     }
 });
 
-
 // 获取订单列表
 app.get('/orderList', async (req, res) => {
     try {
-        var orders = JSON.parse(await fs.readFile(ORDER_FILE, 'utf8'));
+        const orders = await readData('wxOrders')
         let userInfo = req.query
-
         const totalItems = orders.length;
         let page = parseInt(userInfo.pageNumber)
         let pageSize = parseInt(userInfo.pageSize)
@@ -326,8 +219,6 @@ app.get('/orderList', async (req, res) => {
         let items = []
         items = orders.slice(start, end);
         const total = orders.length
-
-
         let obj = {
             status: 200,
             msg: "获取配件列表成功",
@@ -344,50 +235,10 @@ app.get('/orderList', async (req, res) => {
     }
 });
 
-
-// 模拟获取附近门店
-app.get('/fjmd', async (req, res) => {
-    // 
-    try {
-        var mdlist = JSON.parse(await fs.readFile(MD_FILE, 'utf8'));
-        let userInfo = req.query
-
-        const totalItems = mdlist.length;
-        let page = parseInt(userInfo.pageNumber)
-        let pageSize = parseInt(userInfo.pageSize)
-        const start = (page - 1) * pageSize
-        const end = start + pageSize;
-        const totalPages = Math.ceil(totalItems / pageSize);
-        let items = []
-        items = mdlist.slice(start, end);
-        const total = mdlist.length
-
-
-        let obj = {
-            status: 1,
-            msg: "获取配件列表成功",
-            data: {
-                pois: items,
-                count: total,
-                infocode: "10000",
-                status: "1",
-                info: "OK",
-            }
-        }
-        res.send(obj);
-
-    } catch (error) {
-        res.status(500).json({ error: '服务器错误' });
-    }
-
-})
-
 // 我的设备 SB_FILE
-
 app.get('/mysb', async (req, res) => {
-    // 
     try {
-        var sbList = JSON.parse(await fs.readFile(SB_FILE, 'utf8'));
+        const sbList = await readData('wxSbs')
         let userInfo = req.query
 
         const totalItems = sbList.length;
@@ -419,30 +270,17 @@ app.get('/mysb', async (req, res) => {
 
 })
 // 聊天 CHARTS_FILE
-
 app.get('/charts', async (req, res) => {
     // 
     try {
-        var charts = JSON.parse(await fs.readFile(CHARTS_FILE, 'utf8'));
-        let userInfo = req.query
-        const totalItems = charts.length;
-        let page = parseInt(userInfo.pageNumber)
-        let pageSize = parseInt(userInfo.pageSize)
-        const start = (page - 1) * pageSize
-        const end = start + pageSize;
-        const totalPages = Math.ceil(totalItems / pageSize);
-        let items = []
-        items = charts.slice(start, end);
-        const total = charts.length
 
+        const charts = await readData('wxCharts')
 
         let obj = {
             status: 200,
             msg: "获取聊天信息成功",
             data: {
                 data: charts,
-                total: total,
-                pages: totalPages
             }
         }
 
@@ -457,11 +295,12 @@ app.get('/charts', async (req, res) => {
 // 添加消息 addmsg
 app.post('/addmsg', async (req, res) => {
     try {
-        var charts = JSON.parse(await fs.readFile(CHARTS_FILE, 'utf8'));
+        const charts = await readData('wxCharts')
         let createTime = moment(new Date()).format("YYYY-MM-DD HH:mm:ss")
         let { userName, sendUserId, userAvatar, messageContent, fileName, disMessageType, fileUrl, fileSuffix, isMyMessage } = req.body
         charts.push({ ...req.body, createTime })
-        await fs.writeFile(CHARTS_FILE, JSON.stringify(charts, null, 2));
+
+        writeData('wxCharts','charts')
         let obj = {
             status: 200,
             msg: "发送成功",
@@ -478,6 +317,7 @@ app.post('/addmsg', async (req, res) => {
 
 
 
+const ADDRESS_FILE = path.join(__dirname, 'address.json')
 // 获取城市树
 app.get('/addressTree', async (req, res) => {
     // ADDRESS_FILE
@@ -493,13 +333,18 @@ app.get('/addressTree', async (req, res) => {
 
 })
 
-
+// 错误处理中间件
+app.use((err, req, res, next) => {
+    console.error('服务器错误:', err)
+    res.status(500).json({
+        success: false,
+        message: '服务器内部错误'
+    })
+})
 
 
 // 启动服务器
-initializeUsersFile().then(() => {
-    app.listen(PORT, () => {
-        console.log(`服务器运行在 http://localhost:${PORT}`);
-    });
+app.listen(PORT, () => {
+    console.log(`服务器运行在 http://localhost:${PORT}`);
 });
 
