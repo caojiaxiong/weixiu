@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>聊天室测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .chat-container {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .user-info {
+            margin-bottom: 20px;
+            padding: 10px;
+            background: #e3f2fd;
+            border-radius: 5px;
+        }
+        .messages {
+            height: 400px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin-bottom: 20px;
+            background: #fafafa;
+        }
+        .message {
+            margin-bottom: 10px;
+            padding: 8px;
+            border-radius: 5px;
+            background: white;
+            border-left: 3px solid #2196f3;
+        }
+        .message-info {
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+        .input-area {
+            display: flex;
+            gap: 10px;
+        }
+        input, button {
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        input[type="text"] {
+            flex: 1;
+        }
+        button {
+            background: #2196f3;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #1976d2;
+        }
+        .online-users {
+            margin-top: 20px;
+            padding: 10px;
+            background: #e8f5e8;
+            border-radius: 5px;
+        }
+        .status {
+            margin-top: 10px;
+            padding: 5px;
+            border-radius: 3px;
+            background: #fff3cd;
+            color: #856404;
+        }
+    </style>
+</head>
+<body>
+    <div class="chat-container">
+        <h1>聊天室测试</h1>
+        
+        <div class="user-info">
+            <label>用户名: <input type="text" id="userName" value="测试用户" /></label>
+            <button onclick="joinChat()">加入聊天</button>
+            <span id="connectionStatus">未连接</span>
+        </div>
+
+        <div class="messages" id="messages"></div>
+
+        <div class="input-area">
+            <input type="text" id="messageInput" placeholder="输入消息..." onkeypress="handleKeyPress(event)" />
+            <button onclick="sendMessage()">发送</button>
+            <button onclick="getMessages()">刷新</button>
+            <button onclick="loadMoreMessages()" id="loadMoreBtn">加载更多</button>
+            <button onclick="getOnlineUsers()">在线用户</button>
+        </div>
+
+        <div class="online-users" id="onlineUsers"></div>
+        <div class="status" id="status"></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        let socket;
+        let currentUser = null;
+        let allMessages = [];
+        let currentPage = 1;
+        let hasMoreMessages = true;
+        let isLoadingMessages = false;
+
+        function showStatus(message, type = 'info') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+
+        function updateConnectionStatus(status) {
+            document.getElementById('connectionStatus').textContent = status;
+        }
+
+        function joinChat() {
+            const userName = document.getElementById('userName').value.trim();
+            if (!userName) {
+                alert('请输入用户名');
+                return;
+            }
+
+            currentUser = {
+                userName: userName,
+                userAvatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(userName)}&background=random`,
+                sendUserId: Date.now().toString()
+            };
+
+            // 连接WebSocket
+            socket = io('http://localhost:3001');
+
+            socket.on('connect', () => {
+                updateConnectionStatus('已连接');
+                socket.emit('joinChat', currentUser);
+                showStatus(`${userName} 已加入聊天室`, 'success');
+            });
+
+            socket.on('disconnect', () => {
+                updateConnectionStatus('已断开');
+                showStatus('连接已断开', 'error');
+            });
+
+            socket.on('newMessage', (message) => {
+                addNewMessage(message);
+            });
+
+            socket.on('userJoined', (userData) => {
+                showStatus(`${userData.userName} 加入了聊天室`);
+            });
+
+            socket.on('userLeft', (userData) => {
+                showStatus(`${userData.userName} 离开了聊天室`);
+            });
+
+            socket.on('userTyping', (data) => {
+                if (data.isTyping) {
+                    showStatus(`${data.userName} 正在输入...`);
+                } else {
+                    showStatus('');
+                }
+            });
+
+            socket.on('messageError', (error) => {
+                showStatus(`发送失败: ${error.error}`, 'error');
+            });
+        }
+
+        function sendMessage() {
+            const messageInput = document.getElementById('messageInput');
+            const messageContent = messageInput.value.trim();
+            
+            if (!messageContent) {
+                alert('请输入消息内容');
+                return;
+            }
+
+            if (!socket || !currentUser) {
+                alert('请先加入聊天');
+                return;
+            }
+
+            const messageData = {
+                userName: currentUser.userName,
+                sendUserId: currentUser.sendUserId,
+                userAvatar: currentUser.userAvatar,
+                messageContent: messageContent,
+                disMessageType: 'text',
+                isMyMessage: true
+            };
+
+            socket.emit('sendMessage', messageData);
+            messageInput.value = '';
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        function addNewMessage(message) {
+            // 新消息直接添加到底部
+            allMessages.push(message);
+            displayMessage(message);
+            scrollToBottom();
+        }
+
+        function displayMessage(message) {
+            const messagesDiv = document.getElementById('messages');
+            const messageElement = document.createElement('div');
+            messageElement.className = 'message';
+            messageElement.dataset.messageId = message.id;
+            messageElement.innerHTML = `
+                <div class="message-info">
+                    ${message.userName} - ${message.createTime}
+                </div>
+                <div>${message.messageContent}</div>
+            `;
+            messagesDiv.appendChild(messageElement);
+        }
+
+        function prependMessages(messages) {
+            // 将历史消息插入到顶部
+            const messagesDiv = document.getElementById('messages');
+            const fragment = document.createDocumentFragment();
+            
+            messages.forEach(message => {
+                const messageElement = document.createElement('div');
+                messageElement.className = 'message';
+                messageElement.dataset.messageId = message.id;
+                messageElement.innerHTML = `
+                    <div class="message-info">
+                        ${message.userName} - ${message.createTime}
+                    </div>
+                    <div>${message.messageContent}</div>
+                `;
+                fragment.appendChild(messageElement);
+            });
+            
+            messagesDiv.insertBefore(fragment, messagesDiv.firstChild);
+        }
+
+        function scrollToBottom() {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        function scrollToTop() {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.scrollTop = 0;
+        }
+
+        async function getMessages(page = 1, pageSize = 20, isLoadMore = false) {
+            if (isLoadingMessages) return;
+            isLoadingMessages = true;
+
+            try {
+                let url = `http://localhost:3001/charts?page=${page}&pageSize=${pageSize}`;
+                
+                // 如果是加载更多，使用lastMessageId
+                if (isLoadMore && allMessages.length > 0) {
+                    const firstMessage = allMessages[0];
+                    url = `http://localhost:3001/charts?pageSize=${pageSize}&lastMessageId=${firstMessage.id}`;
+                }
+
+                const response = await fetch(url);
+                const result = await response.json();
+                
+                if (result.status === 200) {
+                    const messages = result.data.data;
+                    const pagination = result.data.pagination;
+                    
+                    if (isLoadMore) {
+                        // 加载更多历史消息
+                        if (messages.length > 0) {
+                            allMessages = messages.concat(allMessages);
+                            prependMessages(messages);
+                            showStatus(`加载了 ${messages.length} 条历史消息`);
+                        } else {
+                            showStatus('没有更多历史消息了');
+                        }
+                        hasMoreMessages = pagination.hasMore;
+                    } else {
+                        // 初始加载
+                        allMessages = messages;
+                        const messagesDiv = document.getElementById('messages');
+                        messagesDiv.innerHTML = '';
+                        
+                        messages.forEach(message => {
+                            displayMessage(message);
+                        });
+                        
+                        hasMoreMessages = pagination.hasMore;
+                        showStatus(`加载了 ${messages.length} 条消息，共 ${pagination.totalCount} 条`);
+                        
+                        // 滚动到底部
+                        setTimeout(() => scrollToBottom(), 100);
+                    }
+                } else {
+                    showStatus('获取消息失败', 'error');
+                }
+            } catch (error) {
+                showStatus(`获取消息失败: ${error.message}`, 'error');
+            } finally {
+                isLoadingMessages = false;
+            }
+        }
+
+        async function loadMoreMessages() {
+            if (!hasMoreMessages || isLoadingMessages) {
+                return;
+            }
+            
+            const loadMoreBtn = document.getElementById('loadMoreBtn');
+            loadMoreBtn.textContent = '加载中...';
+            loadMoreBtn.disabled = true;
+            
+            showStatus('正在加载更多消息...');
+            const messagesDiv = document.getElementById('messages');
+            const scrollTop = messagesDiv.scrollTop;
+            
+            await getMessages(1, 20, true);
+            
+            // 保持滚动位置
+            setTimeout(() => {
+                messagesDiv.scrollTop = scrollTop + 100;
+                loadMoreBtn.textContent = hasMoreMessages ? '加载更多' : '没有更多了';
+                loadMoreBtn.disabled = !hasMoreMessages;
+            }, 100);
+        }
+
+        async function getOnlineUsers() {
+            try {
+                const response = await fetch('http://localhost:3001/online-users');
+                const result = await response.json();
+                
+                if (result.status === 200) {
+                    const onlineUsersDiv = document.getElementById('onlineUsers');
+                    onlineUsersDiv.innerHTML = `
+                        <h3>在线用户 (${result.data.count})</h3>
+                        <ul>
+                            ${result.data.users.map(user => `<li>${user.userName}</li>`).join('')}
+                        </ul>
+                    `;
+                }
+            } catch (error) {
+                showStatus(`获取在线用户失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 监听滚动事件，实现上滑加载更多
+        function setupScrollListener() {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.addEventListener('scroll', () => {
+                // 当滚动到顶部附近时加载更多
+                if (messagesDiv.scrollTop <= 50 && hasMoreMessages && !isLoadingMessages) {
+                    loadMoreMessages();
+                }
+            });
+        }
+
+        // 页面加载时的操作
+        window.onload = function() {
+            getMessages(); // 初始加载最新消息
+            setupScrollListener(); // 设置滚动监听
+        };
+    </script>
+</body>
+</html>
